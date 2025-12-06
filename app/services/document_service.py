@@ -3,6 +3,7 @@ Document service for handling file uploads and embeddings
 """
 import os
 import uuid
+import logging
 from typing import Dict, List, Optional, Any
 from fastapi import UploadFile
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -12,6 +13,10 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from embeddings_util import upsert_documents
 from retriever import retrieve_similar_docs
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class DocumentService:
@@ -78,10 +83,16 @@ class DocumentService:
             ]
             
             # Upsert documents (creates embeddings and stores in DB)
+            logger.info(f"[DocumentService] Processing {len(docs)} document chunks for file: {file.filename}")
+            logger.debug(f"[DocumentService] File ID: {file_id}")
+            logger.debug(f"[DocumentService] First chunk preview: {docs[0]['content'][:100] if docs else 'N/A'}...")
+            
             # Run in thread pool to avoid blocking event loop
             import asyncio
             loop = asyncio.get_event_loop()
+            logger.info("[DocumentService] Starting document upsert (embedding generation + DB storage)...")
             await loop.run_in_executor(None, upsert_documents, docs)
+            logger.info(f"[DocumentService] Successfully processed {len(chunks)} chunks for file: {file.filename}")
             
             return {
                 "file_id": file_id,

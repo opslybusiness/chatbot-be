@@ -1,10 +1,15 @@
 # embedding_utils.py
 import os
 import json
+import logging
 from typing import List, Dict
 from dotenv import load_dotenv
 from sqlmodel import create_engine, Session
 from sqlalchemy import text
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Import the new embedding service
 # Add parent directory to path to import from app/services
@@ -81,35 +86,65 @@ def get_engine():
 
 # --- DB OPERATIONS ---
 def upsert_documents(docs: List[Dict], batch_size: int = 100):
-    engine = get_engine()  # reuse same engine every time
-    with Session(engine) as session:
-        for i in range(0, len(docs), batch_size):
-            batch = docs[i : i + batch_size]
-            texts = [d["content"] for d in batch]
-            vectors = embed_texts(texts)
+    logger.info(f"[EmbeddingsUtil] Starting upsert for {len(docs)} document(s), batch_size={batch_size}")
+    
+    try:
+        engine = get_engine()  # reuse same engine every time
+        logger.info("[EmbeddingsUtil] Database engine obtained")
+        
+        with Session(engine) as session:
+            total_batches = (len(docs) + batch_size - 1) // batch_size
+            logger.info(f"[EmbeddingsUtil] Processing {total_batches} batch(es)")
             
-            for doc, vec in zip(batch, vectors):
-                stmt = text(
-                    """
-                    INSERT INTO documents (id, content, metadata, embedding, created_at)
-                    VALUES (:id, :content, :metadata, :embedding, now())
-                    ON CONFLICT (id) DO UPDATE
-                    SET content = EXCLUDED.content,
-                        metadata = EXCLUDED.metadata,
-                        embedding = EXCLUDED.embedding,
-                        created_at = now();
-                    """
-                )
-                session.execute(
-                    stmt,
-                    {
-                        "id": doc["id"],
-                        "content": doc["content"],
-                        "metadata": json.dumps(doc.get("metadata") or {}),
-                        "embedding": vec,
-                    },
-                )
-        session.commit()
+            for batch_idx, i in enumerate(range(0, len(docs), batch_size), 1):
+                batch = docs[i : i + batch_size]
+                logger.info(f"[EmbeddingsUtil] Processing batch {batch_idx}/{total_batches} ({len(batch)} documents)")
+                
+                texts = [d["content"] for d in batch]
+                logger.info(f"[EmbeddingsUtil] Generating embeddings for batch {batch_idx}...")
+                logger.debug(f"[EmbeddingsUtil] First text in batch: {texts[0][:100] if texts else 'N/A'}...")
+                
+                vectors = embed_texts(texts)
+                logger.info(f"[EmbeddingsUtil] Generated {len(vectors)} embedding(s) for batch {batch_idx}")
+                logger.debug(f"[EmbeddingsUtil] First embedding dimension: {len(vectors[0]) if vectors else 0}")
+                
+                logger.info(f"[EmbeddingsUtil] Inserting/updating {len(batch)} document(s) in database...")
+                for doc_idx, (doc, vec) in enumerate(zip(batch, vectors), 1):
+                    try:
+                        stmt = text(
+                            """
+                            INSERT INTO documents (id, content, metadata, embedding, created_at)
+                            VALUES (:id, :content, :metadata, :embedding, now())
+                            ON CONFLICT (id) DO UPDATE
+                            SET content = EXCLUDED.content,
+                                metadata = EXCLUDED.metadata,
+                                embedding = EXCLUDED.embedding,
+                                created_at = now();
+                            """
+                        )
+                        session.execute(
+                            stmt,
+                            {
+                                "id": doc["id"],
+                                "content": doc["content"],
+                                "metadata": json.dumps(doc.get("metadata") or {}),
+                                "embedding": vec,
+                            },
+                        )
+                        if doc_idx == 1 or doc_idx % 10 == 0:
+                            logger.debug(f"[EmbeddingsUtil] Processed {doc_idx}/{len(batch)} documents in batch {batch_idx}")
+                    except Exception as e:
+                        logger.error(f"[EmbeddingsUtil] Error upserting document {doc.get('id', 'unknown')}: {str(e)}")
+                        raise
+                
+                logger.info(f"[EmbeddingsUtil] Batch {batch_idx} processed successfully")
+            
+            logger.info("[EmbeddingsUtil] Committing transaction...")
+            session.commit()
+            logger.info(f"[EmbeddingsUtil] Successfully upserted {len(docs)} document(s)")
+    except Exception as e:
+        logger.error(f"[EmbeddingsUtil] Error during upsert: {str(e)}", exc_info=True)
+        raise
 
 # --- DEMO / SANITY TEST ---
 if __name__ == "__main__":

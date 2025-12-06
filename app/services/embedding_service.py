@@ -2,11 +2,16 @@
 Embedding service with support for multiple embedding providers
 """
 import os
+import logging
 from abc import ABC, abstractmethod
 from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Embedding provider types
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "jina")  # "jina" or "gemini"
@@ -65,6 +70,11 @@ class JinaEmbedder(BaseEmbedder):
         """Embed texts using Jina AI API"""
         import requests
         
+        logger.info(f"[JinaEmbedder] Starting embedding for {len(texts)} text(s)")
+        logger.debug(f"[JinaEmbedder] Model: {self.model}, Task: {self.task}, Dimensions: {self.dimensions}")
+        logger.debug(f"[JinaEmbedder] API Key present: {bool(self.api_key)}")
+        logger.debug(f"[JinaEmbedder] First text preview: {texts[0][:100] if texts else 'N/A'}...")
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
@@ -78,18 +88,35 @@ class JinaEmbedder(BaseEmbedder):
         }
         
         try:
-            response = requests.post(self.api_url, json=payload, headers=headers)
+            logger.info(f"[JinaEmbedder] Calling Jina API: {self.api_url}")
+            response = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
+            logger.info(f"[JinaEmbedder] API Response status: {response.status_code}")
+            
             response.raise_for_status()
             
             result = response.json()
+            logger.debug(f"[JinaEmbedder] API Response keys: {list(result.keys())}")
+            
             # The API returns data in the format: {"data": [{"embedding": [...], ...}, ...]}
             if "data" in result:
                 embeddings = [item["embedding"] for item in result["data"]]
+                logger.info(f"[JinaEmbedder] Successfully generated {len(embeddings)} embedding(s)")
+                logger.debug(f"[JinaEmbedder] First embedding dimension: {len(embeddings[0]) if embeddings else 0}")
                 return embeddings
             else:
+                logger.error(f"[JinaEmbedder] Unexpected response format: {result}")
                 raise ValueError(f"Unexpected response format from Jina API: {result}")
+        except requests.exceptions.Timeout as e:
+            logger.error(f"[JinaEmbedder] API timeout: {str(e)}")
+            raise RuntimeError(f"Jina API timeout: {str(e)}")
         except requests.exceptions.RequestException as e:
+            logger.error(f"[JinaEmbedder] API request error: {str(e)}")
+            logger.error(f"[JinaEmbedder] Response status: {getattr(e.response, 'status_code', 'N/A')}")
+            logger.error(f"[JinaEmbedder] Response text: {getattr(e.response, 'text', 'N/A')[:500]}")
             raise RuntimeError(f"Error calling Jina API: {str(e)}")
+        except Exception as e:
+            logger.error(f"[JinaEmbedder] Unexpected error: {str(e)}", exc_info=True)
+            raise
     
     def get_embedding_dimension(self) -> int:
         """Get embedding dimension"""
@@ -193,7 +220,14 @@ class EmbeddingService:
         Returns:
             List of embedding vectors
         """
-        return self.embedder.embed_texts(texts)
+        logger.info(f"[EmbeddingService] Embedding {len(texts)} text(s) using provider: {self.provider}")
+        try:
+            embeddings = self.embedder.embed_texts(texts)
+            logger.info(f"[EmbeddingService] Successfully generated {len(embeddings)} embedding(s)")
+            return embeddings
+        except Exception as e:
+            logger.error(f"[EmbeddingService] Error embedding texts: {str(e)}", exc_info=True)
+            raise
     
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embeddings"""

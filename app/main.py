@@ -1,6 +1,8 @@
 """
 FastAPI main application for RAG Chatbot
 """
+import logging
+import sys
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -8,6 +10,18 @@ from typing import List, Optional
 import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+
+# Configure logging for Vercel (logs to stdout/stderr)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger(__name__)
+logger.info("Starting RAG Chatbot API")
 
 from app.schemas import (
     ChatMessageRequest,
@@ -109,6 +123,7 @@ async def send_message(
     The chatbot uses RAG to retrieve relevant context from documents.
     All messages are matched by user_id only (session_id is optional and ignored).
     """
+    logger.info(f"[API] POST /chat/message - user_id={user_id}, message_length={len(request.message)}")
     try:
         response = await chat_service.process_message(
             message=request.message,
@@ -116,12 +131,14 @@ async def send_message(
             session_id=request.session_id,
             use_rag=request.use_rag if hasattr(request, 'use_rag') else True
         )
+        logger.info(f"[API] Successfully generated response, sources_count={len(response.get('sources', []))}")
         return ChatMessageResponse(
             session_id=request.session_id,
             message=response["message"],
             sources=response.get("sources", [])
         )
     except Exception as e:
+        logger.error(f"[API] Error processing message: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
 

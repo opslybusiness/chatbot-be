@@ -3,6 +3,7 @@ Chat service for handling chatbot interactions with RAG
 """
 import os
 import uuid
+import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from dotenv import load_dotenv
@@ -19,6 +20,10 @@ from chat_memory import PostgresChatMessageHistory
 from retriever import retrieve_similar_docs
 
 load_dotenv()
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class ChatService:
@@ -146,37 +151,53 @@ class ChatService:
         config = {"configurable": {"session_id": user_id}}
         
         # Retrieve relevant documents if RAG is enabled
+        logger.info(f"[ChatService] Processing message for user_id={user_id}, use_rag={use_rag}")
+        logger.debug(f"[ChatService] Message: '{message[:100]}...'")
+        
         sources = []
         context = ""
         
         if use_rag:
+            logger.info("[ChatService] RAG enabled - starting document retrieval...")
             try:
                 # Run synchronous retrieval in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
+                logger.info(f"[ChatService] Calling retrieve_similar_docs with query: '{message[:100]}...'")
                 similar_docs = await loop.run_in_executor(
                     None, retrieve_similar_docs, message, 3
                 )
+                logger.info(f"[ChatService] Retrieved {len(similar_docs)} similar document(s)")
+                
                 if similar_docs:
                     sources = similar_docs
+                    logger.info(f"[ChatService] Best match similarity: {similar_docs[0].get('similarity', 'N/A')}")
+                    
                     # Format context from retrieved documents
                     context_parts = []
-                    for doc in similar_docs:
+                    for i, doc in enumerate(similar_docs, 1):
+                        content_preview = doc['content'][:100] + "..." if len(doc['content']) > 100 else doc['content']
+                        logger.debug(f"[ChatService] Context doc {i}: similarity={doc.get('similarity', 'N/A')}, preview={content_preview}")
                         context_parts.append(f"Context: {doc['content']}")
                     context = "\n\n".join(context_parts)
+                    logger.info(f"[ChatService] Context length: {len(context)} characters")
                     
                     # Add context to the message
                     enhanced_message = f"{message}\n\nRelevant information:\n{context}"
+                    logger.debug(f"[ChatService] Enhanced message length: {len(enhanced_message)} characters")
                 else:
+                    logger.warning("[ChatService] No similar documents found - proceeding without context")
                     enhanced_message = message
             except Exception as e:
                 # If RAG fails, continue without context
-                print(f"RAG retrieval error: {e}")
+                logger.error(f"[ChatService] RAG retrieval error: {str(e)}", exc_info=True)
                 enhanced_message = message
         else:
+            logger.info("[ChatService] RAG disabled - using original message")
             enhanced_message = message
         
         # Invoke the chain with message history
         try:
+            logger.info("[ChatService] Creating chain with message history...")
             # Create chain with memory for this specific user
             # session_id is ignored - only user_id is used for database operations
             get_session_history = self._get_session_history_factory(user_id)
@@ -185,6 +206,7 @@ class ChatService:
                 get_session_history
             )
             
+            logger.info("[ChatService] Invoking LLM chain...")
             # Run synchronous chain invocation in thread pool
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
@@ -196,11 +218,15 @@ class ChatService:
             )
             
             ai_response = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"[ChatService] LLM response generated, length: {len(ai_response)} characters")
+            logger.debug(f"[ChatService] Response preview: {ai_response[:200]}...")
+            logger.info(f"[ChatService] Returning response with {len(sources)} source(s)")
             
             return {
                 "message": ai_response,
                 "sources": sources
             }
         except Exception as e:
+            logger.error(f"[ChatService] Error generating response: {str(e)}", exc_info=True)
             raise Exception(f"Error generating response: {str(e)}")
 
