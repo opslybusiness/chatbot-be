@@ -1,0 +1,30 @@
+# Python / FastAPI
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+.env
+.env.*
+.venv/
+venv/
+build/
+dist/
+
+# SQLAlchemy / Alembic
+alembic/versions/*.pyc
+alembic.ini
+
+# Logs
+*.log
+logs/
+log/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
