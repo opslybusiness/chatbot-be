@@ -37,22 +37,31 @@ origins = [
     "http://localhost:8080",
 ]
 
-# Middleware to normalize double slashes in paths
+# Middleware to normalize double slashes and handle OPTIONS preflight early
 class NormalizePathMiddleware(BaseHTTPMiddleware):
-    """Normalize double slashes and ensure paths are correct"""
+    """Normalize double slashes and ensure paths are correct, handle OPTIONS early"""
     async def dispatch(self, request: Request, call_next):
         # Fix double slashes in path before processing
         original_path = request.url.path
         if "//" in original_path:
-            # Create a new scope with normalized path
+            # Normalize the path by replacing all double slashes with single slash
             normalized_path = original_path.replace("//", "/")
-            scope = dict(request.scope)
-            scope["path"] = normalized_path
-            # Reconstruct the request URL with normalized path
-            if normalized_path != original_path:
-                # Create new request with corrected path
-                # Note: We modify the scope which will affect downstream handlers
-                request.scope["path"] = normalized_path
+            # Update the scope path
+            request.scope["path"] = normalized_path
+        
+        # Handle OPTIONS requests early to prevent any redirects
+        if request.method == "OPTIONS":
+            # Create a response with CORS headers immediately
+            response = Response()
+            origin = request.headers.get("origin")
+            if origin in origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, Origin, X-Requested-With"
+            response.headers["Access-Control-Max-Age"] = "3600"
+            return response
+        
         response = await call_next(request)
         return response
 
@@ -116,6 +125,7 @@ async def send_message(
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
 
+@app.options("/chat/session")
 @app.post("/chat/session", response_model=ChatSessionResponse)
 async def create_session(
     session_id: Optional[str] = None,
@@ -246,6 +256,7 @@ async def search_documents(
         raise HTTPException(status_code=500, detail=f"Error searching documents: {str(e)}")
 
 
+@app.options("/documents/list")
 @app.get("/documents/list")
 async def list_documents():
     """List all uploaded documents"""
