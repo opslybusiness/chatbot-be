@@ -1,11 +1,13 @@
 """
 FastAPI main application for RAG Chatbot
 """
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 import uvicorn
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from app.schemas import (
     ChatMessageRequest,
@@ -22,23 +24,51 @@ from app.auth import get_user_id_from_token
 app = FastAPI(
     title="RAG Chatbot API",
     description="FastAPI backend for RAG-based chatbot with document ingestion",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False  # Disable automatic slash redirects to prevent CORS preflight issues
 )
 
 
 origins = [
     "https://marketing-minds-three.vercel.app",
     "https://www.opslybusiness.me",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
 ]
 
-#cors 
+# Middleware to normalize double slashes in paths
+class NormalizePathMiddleware(BaseHTTPMiddleware):
+    """Normalize double slashes and ensure paths are correct"""
+    async def dispatch(self, request: Request, call_next):
+        # Fix double slashes in path before processing
+        original_path = request.url.path
+        if "//" in original_path:
+            # Create a new scope with normalized path
+            normalized_path = original_path.replace("//", "/")
+            scope = dict(request.scope)
+            scope["path"] = normalized_path
+            # Reconstruct the request URL with normalized path
+            if normalized_path != original_path:
+                # Create new request with corrected path
+                # Note: We modify the scope which will affect downstream handlers
+                request.scope["path"] = normalized_path
+        response = await call_next(request)
+        return response
+
+# Add path normalization middleware first (before CORS)
+app.add_middleware(NormalizePathMiddleware)
+
+# CORS middleware - must be added after path normalization but before other middleware
+# This handles preflight OPTIONS requests properly
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # or ["*"] to allow all
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*", "Authorization", "Content-Type"],
-     expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*", "Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight for 1 hour
 )
 
 
@@ -48,6 +78,7 @@ document_service = DocumentService()
 
 
 @app.get("/", response_model=HealthResponse)
+@app.get("", response_model=HealthResponse)  # Handle both with and without trailing slash
 async def root():
     """Root endpoint - health check"""
     return HealthResponse(status="ok", message="RAG Chatbot API is running")
