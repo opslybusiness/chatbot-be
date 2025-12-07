@@ -113,6 +113,28 @@ async def health_check():
     return HealthResponse(status="ok", message="Service is healthy")
 
 
+@app.get("/debug/embedding-config")
+async def get_embedding_config():
+    """Debug endpoint to check current embedding configuration"""
+    from app.services.embedding_service import get_embedding_service
+    import os
+    
+    service = get_embedding_service()
+    config = {
+        "provider": service.get_provider(),
+        "dimension": service.get_embedding_dimension(),
+        "env_vars": {
+            "EMBEDDING_PROVIDER": os.getenv("EMBEDDING_PROVIDER", "not set"),
+            "JINA_EMBEDDING_MODEL": os.getenv("JINA_EMBEDDING_MODEL", "not set"),
+            "JINA_EMBEDDING_TASK": os.getenv("JINA_EMBEDDING_TASK", "not set"),
+            "JINA_EMBEDDING_DIMENSIONS": os.getenv("JINA_EMBEDDING_DIMENSIONS", "not set"),
+            "JINA_API_KEY": "set" if os.getenv("JINA_API_KEY") else "not set",
+        }
+    }
+    logger.info(f"[API] Embedding config: {config}")
+    return config
+
+
 @app.post("/chat/message", response_model=ChatMessageResponse)
 async def send_message(
     request: ChatMessageRequest,
@@ -208,14 +230,16 @@ async def clear_session(
 @app.post("/documents/upload", response_model=FileUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    metadata: Optional[str] = None
+    metadata: Optional[str] = None,
+    user_id: str = Depends(get_user_id_from_token)
 ):
     """
     Upload a document file for embedding creation and storage.
     Supports text files, PDFs, and other document formats.
+    Documents are associated with the authenticated user.
     """
     try:
-        result = await document_service.upload_and_process_file(file, metadata)
+        result = await document_service.upload_and_process_file(file, user_id, metadata)
         return FileUploadResponse(
             file_id=result["file_id"],
             filename=result["filename"],
@@ -228,13 +252,14 @@ async def upload_document(
 
 @app.post("/documents/upload-multiple", response_model=List[FileUploadResponse])
 async def upload_multiple_documents(
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    user_id: str = Depends(get_user_id_from_token)
 ):
-    """Upload multiple documents at once"""
+    """Upload multiple documents at once. Documents are associated with the authenticated user."""
     results = []
     for file in files:
         try:
-            result = await document_service.upload_and_process_file(file)
+            result = await document_service.upload_and_process_file(file, user_id)
             results.append(FileUploadResponse(
                 file_id=result["file_id"],
                 filename=result["filename"],
@@ -255,11 +280,12 @@ async def upload_multiple_documents(
 @app.get("/documents/search", response_model=List[DocumentSearchResponse])
 async def search_documents(
     query: str,
-    top_k: int = 5
+    top_k: int = 5,
+    user_id: str = Depends(get_user_id_from_token)
 ):
-    """Search for similar documents using vector similarity"""
+    """Search for similar documents using vector similarity. Only returns documents for the authenticated user."""
     try:
-        results = await document_service.search_documents(query, top_k)
+        results = await document_service.search_documents(query, user_id, top_k)
         return [
             DocumentSearchResponse(
                 id=doc["id"],
@@ -275,20 +301,25 @@ async def search_documents(
 
 @app.options("/documents/list")
 @app.get("/documents/list")
-async def list_documents():
-    """List all uploaded documents"""
+async def list_documents(
+    user_id: str = Depends(get_user_id_from_token)
+):
+    """List all uploaded documents for the authenticated user"""
     try:
-        documents = await document_service.list_documents()
+        documents = await document_service.list_documents(user_id)
         return documents
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing documents: {str(e)}")
 
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str):
-    """Delete a document and its embeddings"""
+async def delete_document(
+    document_id: str,
+    user_id: str = Depends(get_user_id_from_token)
+):
+    """Delete a document and its embeddings. Users can only delete their own documents."""
     try:
-        await document_service.delete_document(document_id)
+        await document_service.delete_document(document_id, user_id)
         return JSONResponse(content={"status": "success", "message": f"Document {document_id} deleted"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")

@@ -31,6 +31,7 @@ class DocumentService:
     async def upload_and_process_file(
         self,
         file: UploadFile,
+        user_id: str,
         metadata: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -38,6 +39,7 @@ class DocumentService:
         
         Args:
             file: Uploaded file
+            user_id: User ID to associate documents with
             metadata: Optional metadata string (JSON format)
             
         Returns:
@@ -76,6 +78,7 @@ class DocumentService:
                         "source": file.filename,
                         "file_id": file_id,
                         "chunk_index": i,
+                        "user_id": user_id,  # Store user_id in metadata
                         **file_metadata
                     }
                 }
@@ -107,6 +110,7 @@ class DocumentService:
     async def search_documents(
         self,
         query: str,
+        user_id: str,
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
@@ -114,6 +118,7 @@ class DocumentService:
         
         Args:
             query: Search query
+            user_id: User ID to filter documents by
             top_k: Number of results to return
             
         Returns:
@@ -123,16 +128,19 @@ class DocumentService:
             import asyncio
             loop = asyncio.get_event_loop()
             results = await loop.run_in_executor(
-                None, retrieve_similar_docs, query, top_k
+                None, retrieve_similar_docs, query, top_k, user_id
             )
             return results
         except Exception as e:
             raise Exception(f"Error searching documents: {str(e)}")
 
-    async def list_documents(self) -> List[Dict[str, Any]]:
+    async def list_documents(self, user_id: str) -> List[Dict[str, Any]]:
         """
-        List all unique documents (grouped by file_id).
+        List all unique documents (grouped by file_id) for a specific user.
         
+        Args:
+            user_id: User ID to filter documents by
+            
         Returns:
             List of document metadata
         """
@@ -144,7 +152,7 @@ class DocumentService:
             def _list_docs():
                 engine = get_engine()
                 with Session(engine) as session:
-                    # Get unique file_ids from metadata
+                    # Get unique file_ids from metadata filtered by user_id
                     result = session.execute(
                         text("""
                             SELECT DISTINCT 
@@ -153,9 +161,11 @@ class DocumentService:
                                 COUNT(*) as chunk_count
                             FROM documents
                             WHERE metadata::jsonb ? 'file_id'
+                              AND jsonb_extract_path_text(metadata::jsonb, 'user_id') = :user_id
                             GROUP BY file_id, filename
                             ORDER BY filename
-                        """)
+                        """),
+                        {"user_id": user_id}
                     ).fetchall()
                     
                     documents = []
@@ -173,12 +183,13 @@ class DocumentService:
         except Exception as e:
             raise Exception(f"Error listing documents: {str(e)}")
 
-    async def delete_document(self, document_id: str) -> None:
+    async def delete_document(self, document_id: str, user_id: str) -> None:
         """
         Delete a document and all its chunks from the database.
         
         Args:
             document_id: File ID or document ID to delete
+            user_id: User ID to verify ownership before deletion
         """
         try:
             import asyncio
@@ -189,20 +200,26 @@ class DocumentService:
                 engine = get_engine()
                 with Session(engine) as session:
                     # Delete by file_id (all chunks) or by specific document id
+                    # Always verify user_id to ensure users can only delete their own documents
                     if document_id.startswith("_chunk_"):
-                        # Delete specific chunk
+                        # Delete specific chunk (verify user_id)
                         session.execute(
-                            text("DELETE FROM documents WHERE id = :doc_id"),
-                            {"doc_id": document_id}
+                            text("""
+                                DELETE FROM documents 
+                                WHERE id = :doc_id
+                                  AND jsonb_extract_path_text(metadata::jsonb, 'user_id') = :user_id
+                            """),
+                            {"doc_id": document_id, "user_id": user_id}
                         )
                     else:
-                        # Delete all chunks for a file_id
+                        # Delete all chunks for a file_id (verify user_id)
                         session.execute(
                             text("""
                                 DELETE FROM documents 
                                 WHERE jsonb_extract_path_text(metadata::jsonb, 'file_id') = :file_id
+                                  AND jsonb_extract_path_text(metadata::jsonb, 'user_id') = :user_id
                             """),
-                            {"file_id": document_id}
+                            {"file_id": document_id, "user_id": user_id}
                         )
                     session.commit()
             

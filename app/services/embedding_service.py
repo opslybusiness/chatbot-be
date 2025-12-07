@@ -201,9 +201,11 @@ class EmbeddingService:
             task = os.getenv("JINA_EMBEDDING_TASK", "text-matching")
             dimensions = int(os.getenv("JINA_EMBEDDING_DIMENSIONS", "768"))
             self.embedder = JinaEmbedder(model=model, task=task, dimensions=dimensions)
+            logger.info(f"[EmbeddingService] Initialized with provider: {self.provider}, model: {model}, task: {task}, dimensions: {dimensions}")
         elif self.provider == "gemini":
             model_name = os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-001")
             self.embedder = GeminiEmbedder(model_name=model_name)
+            logger.info(f"[EmbeddingService] Initialized with provider: {self.provider}, model: {model_name}")
         else:
             raise ValueError(
                 f"Unknown embedding provider: {provider}. "

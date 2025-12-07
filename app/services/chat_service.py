@@ -162,21 +162,29 @@ class ChatService:
             try:
                 # Run synchronous retrieval in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
-                logger.info(f"[ChatService] Calling retrieve_similar_docs with query: '{message[:100]}...'")
+                logger.info(f"[ChatService] Calling retrieve_similar_docs with query: '{message[:100]}...', user_id={user_id}")
                 similar_docs = await loop.run_in_executor(
-                    None, retrieve_similar_docs, message, 3
+                    None, retrieve_similar_docs, message, 3, user_id
                 )
                 logger.info(f"[ChatService] Retrieved {len(similar_docs)} similar document(s)")
                 
                 if similar_docs:
                     sources = similar_docs
-                    logger.info(f"[ChatService] Best match similarity: {similar_docs[0].get('similarity', 'N/A')}")
+                    best_similarity = similar_docs[0].get('similarity', 0)
+                    logger.info(f"[ChatService] Best match similarity: {best_similarity:.4f}")
+                    
+                    # Warn if similarity is too low
+                    if best_similarity < 0.3:
+                        logger.warning(f"[ChatService] ⚠️ LOW SIMILARITY: {best_similarity:.4f} - documents may not be relevant")
+                        logger.warning("[ChatService] Consider checking if documents need to be re-embedded")
                     
                     # Format context from retrieved documents
                     context_parts = []
                     for i, doc in enumerate(similar_docs, 1):
+                        similarity = doc.get('similarity', 0)
                         content_preview = doc['content'][:100] + "..." if len(doc['content']) > 100 else doc['content']
-                        logger.debug(f"[ChatService] Context doc {i}: similarity={doc.get('similarity', 'N/A')}, preview={content_preview}")
+                        logger.info(f"[ChatService] Context doc {i}: similarity={similarity:.4f}, id={doc.get('id', 'N/A')}")
+                        logger.info(f"[ChatService] Context doc {i} preview: {content_preview}")
                         context_parts.append(f"Context: {doc['content']}")
                     context = "\n\n".join(context_parts)
                     logger.info(f"[ChatService] Context length: {len(context)} characters")
