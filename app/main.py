@@ -3,7 +3,7 @@ FastAPI main application for RAG Chatbot
 """
 import logging
 import sys
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Optional
@@ -167,15 +167,27 @@ async def send_message(
 @app.options("/chat/session")
 @app.post("/chat/session", response_model=ChatSessionResponse)
 async def create_session(
-    session_id: Optional[str] = None,
+    request: Request,
     user_id: str = Depends(get_user_id_from_token)
 ):
     """
     Get chat session info for the authenticated user.
     session_id is optional and only used for client-side reference (not stored in DB).
     All messages are matched by user_id only.
+    Accepts optional JSON body with session_id or empty body.
     """
     try:
+        session_id = None
+        # Check if request has body content
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                if body and "session_id" in body:
+                    session_id = body.get("session_id")
+            except:
+                # No body or invalid JSON, continue with session_id = None
+                pass
+            
         session = await chat_service.create_session(user_id=user_id, session_id=session_id)
         return ChatSessionResponse(
             session_id=session["session_id"],
@@ -183,7 +195,26 @@ async def create_session(
             message_count=session.get("message_count", 0)
         )
     except Exception as e:
+        logger.error(f"Error creating session: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error creating session: {str(e)}")
+
+
+@app.options("/chat/sessions")
+@app.get("/chat/sessions")
+async def list_sessions(
+    user_id: str = Depends(get_user_id_from_token)
+):
+    """
+    List all chat sessions for the authenticated user.
+    Since messages are stored per user_id, this returns a single session representing the user's conversation.
+    """
+    try:
+        sessions = await chat_service.list_sessions(user_id=user_id)
+        # Return as list to match frontend expectations
+        return sessions
+    except Exception as e:
+        logger.error(f"Error listing sessions: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error listing sessions: {str(e)}")
 
 
 @app.get("/chat/session/{session_id}", response_model=ChatSessionResponse)
@@ -199,15 +230,31 @@ async def get_session(
         session = await chat_service.get_session(user_id=user_id, session_id=session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Convert messages to ChatMessage format if they exist
+        messages = session.get("messages", [])
+        chat_messages = []
+        if messages:
+            from app.schemas import ChatMessage
+            for msg in messages:
+                # Support both 'sender' and 'role' fields
+                sender = msg.get("role") or msg.get("sender") or msg.get("type", "user")
+                chat_messages.append(ChatMessage(
+                    sender=sender,
+                    content=msg.get("content") or msg.get("message", ""),
+                    timestamp=msg.get("timestamp") or session.get("created_at")
+                ))
+        
         return ChatSessionResponse(
             session_id=session["session_id"],
             created_at=session.get("created_at"),
             message_count=session.get("message_count", 0),
-            messages=session.get("messages", [])
+            messages=chat_messages if chat_messages else None
         )
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error retrieving session: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error retrieving session: {str(e)}")
 
 

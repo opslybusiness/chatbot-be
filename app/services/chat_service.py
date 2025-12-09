@@ -77,46 +77,95 @@ class ChatService:
         """Get or create chat session for user (session_id is optional client-side identifier, not stored in DB)"""
         # Generate session_id if not provided (only for client reference, not stored)
         if not session_id:
-            session_id = str(uuid.uuid4())
+            session_id = f"user_{user_id}"
         
         # Initialize session by getting history (creates if doesn't exist)
         # Note: session_id is not used in database - only user_id is stored
         history = self._get_session_history(user_id)
         messages = history.messages
         
+        # Calculate created_at from first message if exists
+        created_at = datetime.now()
+        if messages:
+            # If we had timestamps in DB, use first message's timestamp
+            created_at = datetime.now()
+        
         return {
             "session_id": session_id,  # Returned for client reference only
-            "created_at": datetime.now(),
+            "created_at": created_at,
             "message_count": len(messages)
         }
+
+    async def list_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+        """List all chat sessions for a user (since messages are stored per user_id, returns single session)"""
+        try:
+            # Get history by user_id
+            history = self._get_session_history(user_id)
+            messages = history.messages
+            
+            # Calculate created_at from first message (if exists)
+            created_at = None
+            if messages:
+                # Try to get first message timestamp from database if available
+                # For now, use current time as fallback
+                created_at = datetime.now()
+            
+            # Generate a session_id based on user_id for consistency
+            session_id = f"user_{user_id}"
+            
+            return [{
+                "session_id": session_id,
+                "id": session_id,  # Also include 'id' field for frontend compatibility
+                "created_at": created_at,
+                "date": created_at,  # Also include 'date' field for frontend compatibility
+                "timestamp": created_at,  # Also include 'timestamp' field for frontend compatibility
+                "message_count": len(messages)
+            }]
+        except Exception as e:
+            logger.error(f"Error listing sessions: {str(e)}", exc_info=True)
+            return []
 
     async def get_session(self, user_id: str, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get chat history for user (session_id is optional client-side identifier, not used in DB)"""
         try:
             # Generate session_id if not provided (only for client reference)
             if not session_id:
-                session_id = str(uuid.uuid4())
+                session_id = f"user_{user_id}"
             
             # Get history by user_id only (session_id not stored in DB)
             history = self._get_session_history(user_id)
             messages = history.messages
             
-            # Convert to dict format
+            # Calculate created_at from first message
+            created_at = datetime.now()
+            if messages:
+                # If we had timestamps in DB, use first message's timestamp
+                created_at = datetime.now()
+            
+            # Convert to dict format - use both 'sender' and 'role' for compatibility
             message_list = []
             for msg in messages:
+                sender_type = "user" if msg.type == "human" else "ai"
                 message_list.append({
-                    "sender": "user" if msg.type == "human" else "ai",
+                    "sender": sender_type,  # For backward compatibility
+                    "role": sender_type,  # Frontend expects 'role'
+                    "type": sender_type,  # Also include 'type' for compatibility
                     "content": msg.content,
-                    "timestamp": datetime.now()  # Note: You may want to store actual timestamps
+                    "message": msg.content,  # Also include 'message' field for frontend compatibility
+                    "timestamp": created_at  # Use session created_at or calculate from DB if available
                 })
             
             return {
                 "session_id": session_id,  # Returned for client reference only
-                "created_at": datetime.now(),  # Note: Store actual creation time
+                "created_at": created_at,
+                "date": created_at,  # Also include 'date' field
+                "timestamp": created_at,  # Also include 'timestamp' field
                 "message_count": len(messages),
-                "messages": message_list
+                "messages": message_list,
+                "history": message_list  # Also include 'history' field for frontend compatibility
             }
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error getting session: {str(e)}", exc_info=True)
             return None
 
     async def clear_session(self, user_id: str, session_id: Optional[str] = None) -> None:
