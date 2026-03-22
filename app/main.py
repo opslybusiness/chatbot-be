@@ -372,6 +372,58 @@ async def delete_document(
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
 
 
+@app.post("/internal/retrieve")
+async def internal_retrieve(
+    request: Request,
+    x_internal_key: Optional[str] = None,
+):
+    """
+    Server-to-server endpoint for RAG retrieval without user JWT auth.
+    Called by the voice bot backend's queryDocs tool webhook.
+    Secured by INTERNAL_API_KEY environment variable.
+    """
+    import os
+
+    internal_key = os.getenv("INTERNAL_API_KEY", "")
+
+    # Read key from header or body
+    provided_key = request.headers.get("x-internal-key", "")
+    if not provided_key:
+        try:
+            body = await request.json()
+            provided_key = body.get("internal_key", "")
+        except Exception:
+            provided_key = ""
+
+    if internal_key and provided_key != internal_key:
+        raise HTTPException(status_code=401, detail="Invalid internal API key.")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.")
+
+    query   = body.get("query", "")
+    user_id = body.get("user_id", "")
+    top_k   = int(body.get("top_k", 3))
+
+    if not query or not user_id:
+        raise HTTPException(status_code=400, detail="'query' and 'user_id' are required.")
+
+    try:
+        results = await document_service.search_documents(query, user_id, top_k)
+        chunks = [r["content"] for r in results]
+        context = "\n\n---\n\n".join(chunks) if chunks else ""
+        return {
+            "context": context,
+            "chunks": chunks,
+            "count": len(chunks),
+        }
+    except Exception as e:
+        logger.error(f"[internal/retrieve] Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
+
+
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
 
