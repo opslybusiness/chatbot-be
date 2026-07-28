@@ -49,6 +49,7 @@ origins = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
+    "https://opsly.rohanjaved.qzz.io"
 ]
 
 # Middleware to normalize double slashes and handle OPTIONS preflight early
