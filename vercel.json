@@ -5,7 +5,7 @@
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://www.opslybusiness.me, https://marketing-minds-three.vercel.app"
+          "value": "https://www.opslybusiness.me, https://marketing-minds-three.vercel.app", "https://opsly.rohanjaved.qzz.io"
         },
         {
           "key": "Access-Control-Allow-Methods",
@@ -22,6 +22,10 @@
         {
           "key": "Access-Control-Max-Age",
           "value": "3600"
+        },
+         {
+          "key": "trailingSlash",
+          "value": false
         }
       ]
     }
